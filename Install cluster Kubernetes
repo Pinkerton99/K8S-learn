@@ -1,0 +1,173 @@
+//НАСТРОЙКА СЕРВЕРОВ
+
+1. На каждом сервере изменяем ip - адрес на статический
+
+sudo nano /etc/netplan/00-installer-config.yaml
+
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    enp0s3:
+      dhcp4: no
+      addresses:
+        - 192.168.1.10/24  # Ваш статический IP и маска подсети
+      routes:
+        - to: 0.0.0.0/0
+          via: 192.168.1.1  # Шлюз по умолчанию
+      nameservers:
+        addresses:
+          - 8.8.8.8  # DNS-серверы
+          - 8.8.4.4
+
+И применяем изменения
+
+sudo netplan apply
+
+2. Далее разрешаем пользователю выполнение команд из под sudo без ввода пароля
+
+sudo visudo
+
+Добавляем в конец файла:
+
+and    ALL=(ALL:ALL) NOPASSWD: ALL
+
+3. Задаем имена узлам
+
+sudo hostnamectl set-hostname k8s-master.local
+sudo hostnamectl set-hostname k8s-node01.local
+sudo hostnamectl set-hostname k8s-node02.local
+
+И обновляем файл /etc/hosts на каждом сервере
+
+192.168.1.10 k8s-master.local k8s-master
+192.168.1.11 k8s-node01.local k8s-node01
+192.168.1.12 k8s-node02.local k8s-node02
+
+//увеличение размера логического тома и файловой системы
+
+sudo lvextend -l +100%FREE /dev/ubuntu-vg/ubuntu-lv
+sudo resize2fs /dev/ubuntu-vg/ubuntu-lv
+
+4. Обновляем списки репозиториев, производим обновление всех пакетов в ОС, а также устанавливаем необходимые пакеты
+
+apt update && apt -y upgrade && apt -y install apt-transport-https ca-certificates curl gnupg2 software-properties-common
+
+5. Отключаем SWAP
+
+swapoff -a
+
+и также комментируем в файле /etc/fstab запись о SWAP и перезапускаем сервера
+
+6. Загружаем дополнительные сетевые модули из ядра операционной системы
+
+cat <<EOF | tee /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+
+7. Загружаем ранее указанные модули из ядра операционной системы
+
+modprobe overlay
+modprobe br_netfilter
+
+Проверяем, что сетевые модули были успешно загружены и активированы
+
+lsmod | egrep "br_netfilter|overlay"
+
+8. Активируем сетевые параметры, которые отвечают за маршрутизацию трафика через сетевой мост
+
+cat <<EOF | tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+
+Перезапускаем параметры ядра  sysctl --system
+
+9. Отключаем UFW
+
+systemctl stop ufw && systemctl disable ufw
+
+//УСТАНОВКА CRI-O
+
+1.В переменной OS задаем имя и версию используемого дистрибутива, а в переменной CRIO_VERSION версию CRIO, которую будем скачивать
+
+export OS=xUbuntu_22.04
+export CRIO_VERSION=1.25
+
+2. Добавляем данные репозитории в систему
+
+echo "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/$OS/ /"| tee /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list
+echo "deb http://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable:/cri-o:/$CRIO_VERSION/$OS/ /"| tee /etc/apt/sources.list.d/devel:kubic:libcontainers:stable:cri-o:$CRIO_VERSION.list
+
+3. Импортируем GPG-ключи от репозиториев
+
+curl -L https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable:cri-o:$CRIO_VERSION/$OS/Release.key | apt-key add -
+curl -L https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/$OS/Release.key | apt-key add -
+
+4. Обновляем списки репозиториев и устанавливаем CRIO, а также дополнительные утилиты
+
+apt update && apt -y install cri-o cri-o-runc cri-tools
+
+5. Запускаем crio и добавляем его в автозагрузку
+
+systemctl start crio && systemctl enable crio
+
+//УСТАНОВКА KUBERNETES
+
+1. Добавляем GPG-ключ от репозитория Kubernetes и подключаем репозиторий
+
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
+
+2. Обновляем списки репозиториев, устанавливаем пакеты kubelet, kubeadm, kubectl, 
+а также делаем для них операцию hold — таким образом при появлении новых версий для данных компонентов они не будут обновляться
+
+apt update && apt -y install kubelet kubeadm kubectl && apt-mark hold kubelet kubeadm kubectl
+
+3. Инициализируем мастер-ноду а также выделяем подсеть, адреса которой будут назначаться подам в кластере
+
+//команду по инициализации мастер-ноды выполняем только на одном сервере который предназначен именно для мастер-ноды
+
+kubeadm init --pod-network-cidr=10.244.0.0/16
+
+//подсеть 10.244.0.0/16 используется для работы flannel — специального плагина, который создает виртуальную сеть разработанную для работы с контейнерами. 
+flannel мы установим после того как создадим кластере
+
+Далее необходимо выполнить шаги, перечисленные в конце вывода
+
+Создание папки, копирование файла и назначение пользователя от обычного пользователя
+
+export - из по root пользователя
+
+export KUBECONFIG=/etc/kubernetes/admin.conf
+
+и также добавляем эту запись в файл /etc/environment
+
+4. Обратите внимание на самую последнюю строку в выводе команды (kubeadm join) — там будет сгенерирована команда, предназначенная для присоединения рабочих нод. 
+Эту команду выполняем на оставшихся двух серверах. Команду kubeadm join необходимо выполнить от имени root-пользователя или от пользователя с правами sudo
+
+5. Пробуем вывести список узлов кластера 
+
+kubectl get nodes
+
+И список всех подов
+
+kubectl get po -A
+
+6. Так как ранее мы задали подсеть, но не установили сетевой плагин flannel, самое время это сделать (выполняем на мастер ноде)
+
+kubectl apply -f https://github.com/coreos/flannel/raw/master/Documentation/kube-flannel.yml
+
+Проверяем статус запущенных подов:
+
+kubectl get po -n kube-flannel
+
+Поды успешно запущены. Количество реплик flannel соответствует числу нод в кластере.
+
+Кластер создан!
+
+
+
+
