@@ -168,7 +168,3 @@ kubectl get po -n kube-flannel
 
 Кластер создан!
 
-Спасибо
-
-
-
