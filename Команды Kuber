@@ -1,0 +1,24 @@
+kubectl get nodes // Просмотреть ноды кластера
+kubectl get pods // Просмотреть поды кластера
+
+Создать под из контейнера
+
+kubectl run hello --image=adv4000/k8sphp:latest --port=80
+
+kubectl get pod hello // получить подробную информацию о подсети
+
+kubectl exec hello -- date // выполнить команду внутри контейнера
+                              который находится в подсети
+
+kubectl exec -it hello -- sh // подключиться к контейнеру внутри подам
+
+kubectl port-forward --address 0.0.0.0 hello 7788:80 //пробросить порт из пода на хост 
+
+kubectl delete pods hello // удалить под
+
+kubectl apply -f manifest.yml // создать под из манифеста
+
+kubectl delete -f manifest.yml // удалить поды, которые были в манифесте
+
+
+
