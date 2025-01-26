@@ -16,7 +16,7 @@ kubectl port-forward --address 0.0.0.0 hello 7788:80 //пробросить по
 
 kubectl delete pods hello // удалить под
 
-kubectl apply -f manifest.yml // создать под из манифеста
+kubectl apply -f manifest.yml // создать под из конфигурации yaml
 
 kubectl delete -f manifest.yml // удалить поды, которые были в манифесте
 
